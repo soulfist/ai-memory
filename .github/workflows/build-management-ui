@@ -1,0 +1,68 @@
+name: build management-ui (windows)
+
+# 手动触发：仓库 Actions 页 → 左侧 “build management-ui (windows)” → Run workflow。
+# 产物：带 management-ui 的 Windows x86_64 zip（Actions artifact，默认留 90 天）。
+# 与 release.yml 的 windows job 保持一致，只多一个 --features management-ui。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-management-ui:
+    name: windows x86_64 (management-ui)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # 1.95
+        with:
+          toolchain: "1.95"
+
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+
+      - name: Build release binary with management-ui
+        run: cargo build --locked --release -p ai-memory-cli --features management-ui
+
+      - name: Stage and zip
+        shell: pwsh
+        env:
+          RELEASE_ARTIFACT: ai-memory-windows-x86_64-management-ui
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifact = $env:RELEASE_ARTIFACT
+          $stage = "dist/$artifact"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/ai-memory.exe "$stage/ai-memory.exe"
+          Copy-Item -Recurse hooks "$stage/hooks"
+          New-Item -ItemType Directory -Force -Path "$stage/crates/ai-memory-cli/templates" | Out-Null
+          Copy-Item crates/ai-memory-cli/templates/config.default.toml `
+            "$stage/crates/ai-memory-cli/templates/config.default.toml"
+          New-Item -ItemType Directory -Force -Path "$stage/docs" | Out-Null
+          Copy-Item README.md, LICENSE $stage
+          Copy-Item docs/install.md "$stage/docs/install.md"
+          Copy-Item docs/windows.md "$stage/docs/windows.md"
+          $zip = "$artifact.zip"
+          Get-ChildItem $stage | Compress-Archive -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip`n" | Out-File -Encoding ascii -NoNewline "$zip.sha256"
+
+      - name: Smoke test zip
+        shell: pwsh
+        env:
+          RELEASE_ARTIFACT: ai-memory-windows-x86_64-management-ui
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifact = $env:RELEASE_ARTIFACT
+          $smoke = "dist/smoke"
+          Expand-Archive "$artifact.zip" -DestinationPath $smoke -Force
+          & "$smoke/ai-memory.exe" --version
+          & "$smoke/ai-memory.exe" serve --help | Select-String "enable-management-ui"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ai-memory-windows-x86_64-management-ui
+          path: |
+            ai-memory-windows-x86_64-management-ui.zip
+            ai-memory-windows-x86_64-management-ui.zip.sha256
